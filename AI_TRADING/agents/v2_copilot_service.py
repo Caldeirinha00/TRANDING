@@ -33,6 +33,7 @@ from risk.quant_position_sizer import (
 )
 from agents.news_analyzer import news_analyzer
 from agents.llm.mistral_client import mistral_client
+from agents.telegram_notifier import telegram_notifier
 
 logger = logging.getLogger("V2CopilotService")
 
@@ -223,8 +224,20 @@ class V2CopilotService:
             return BinaryResponse(req.request_id, veto=1, reason_code=-401)
 
         # Regista o contexto do trade aprovado para correlação no Harvester (se não for warmup req_id == 0)
-        if req.request_id != 0 and self.trade_harvester:
-            self.trade_harvester.register_approved_context(symbol, state_vec, sl_dist_price)
+        if req.request_id != 0:
+            if self.trade_harvester:
+                self.trade_harvester.register_approved_context(symbol, state_vec, sl_dist_price)
+            asyncio.create_task(
+                telegram_notifier.notify_trade_approved(
+                    symbol=symbol,
+                    direction=direction,
+                    lots=sizing.lots,
+                    price=req.ask if direction > 0 else req.bid,
+                    meta_prob=meta_prob,
+                    sl_mult=rag_res.sl_mult_adj,
+                    tp_mult=rag_res.tp_mult_adj,
+                )
+            )
 
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(
@@ -283,13 +296,21 @@ class V2CopilotService:
                 daily_dd = max(0.0, (day_start_bal - equity) / max(1.0, day_start_bal))
 
                 positions = mt5.positions_get() or []
+                # Cálculo de Risco Correlacionado Nocional (ESMA 1:30)
+                # 1 lote standard = 100.000 EUR -> margem = 100.000 / 30 = 3.333,33 EUR por lote
+                corr_risk_eur = sum(
+                    float(p.volume) * (100000.0 / 30.0)
+                    for p in positions
+                    if getattr(p, "symbol", "") == "EURUSD" and getattr(p, "magic", 0) == 202610
+                )
+
                 self._cached_account_state = AccountState(
                     equity_eur=equity,
                     free_margin_eur=free_margin,
                     used_margin_eur=used_margin,
                     daily_dd_pct=daily_dd,
                     open_positions_count=len(positions),
-                    open_correlated_risk_eur=0.0,
+                    open_correlated_risk_eur=corr_risk_eur,
                 )
 
                 await asyncio.sleep(3.0)

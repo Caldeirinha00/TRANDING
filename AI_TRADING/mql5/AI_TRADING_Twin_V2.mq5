@@ -19,6 +19,8 @@
 input group "--- Parâmetros de Execução & Risco ---"
 input ulong  InpMagicNumber            = 202610;    // Magic Number
 input double InpRiskPercent            = 1.0;       // Risco Máximo por Trade (%)
+input int    InpMaxPositions           = 1;         // Máximo de Posições Concorrentes por Par
+input bool   InpWeekendProtection      = true;      // Ativar Weekend Shield (Sexta > 19h UTC)
 input uint   InpIPCTimeoutMS           = 3000;      // SLA Timeout IPC (ms)
 input bool   InpUseBinaryPipe          = true;      // Utilizar Windows Named Pipe V2
 
@@ -58,6 +60,62 @@ CSmartOrderRouter         g_sor(InpMagicNumber);
 CAutonomousDefenseManager g_adm(InpMagicNumber);
 CQuantRegimeEngine        g_regime;
 
+int CountOpenPositions(const string symbol)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket > 0 && PositionSelectByTicket(ticket))
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == (long)InpMagicNumber && PositionGetString(POSITION_SYMBOL) == symbol)
+            count++;
+      }
+   }
+   return count;
+}
+
+void UpdateChartHUD(const string status_msg, const double h1_adx = 0.0, const double fdi_m5 = 0.0, const double kalman_z = 0.0)
+{
+   if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION))
+      return; // Otimização de performance durante backtest
+
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+   double margin  = AccountInfoDouble(ACCOUNT_MARGIN);
+   double free_m  = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   int open_pos   = CountOpenPositions(_Symbol);
+
+   ENUM_SYSTEM_HEALTH health = g_adm.EvaluateSystemHealth();
+   string health_str = "GREEN (Pipe Online)";
+   if(health == HEALTH_YELLOW) health_str = "YELLOW (Alerta Transitorio)";
+   else if(health == HEALTH_ORANGE) health_str = "ORANGE (Python Offline / Defesa Ativa)";
+   else if(health == HEALTH_RED) health_str = "RED (Drawdown Violado / Stop)";
+
+   MqlDateTime dt;
+   TimeToStruct(TimeGMT(), dt);
+   string session_status = (dt.hour >= InpSessionStartHourUTC && dt.hour < InpSessionEndHourUTC) ? "ABERTA (London/NY)" : "FECHADA (Fora da Janela)";
+
+   string hud = "========================================================\n";
+   hud += StringFormat("  AI_TRADING TWIN V2 | %s M5\n", _Symbol);
+   hud += "========================================================\n";
+   hud += StringFormat("  Status: %s\n", status_msg);
+   hud += StringFormat("  Sessao UTC (%02d:%02d): %s\n", dt.hour, dt.min, session_status);
+   hud += StringFormat("  Saude do Sistema: %s\n", health_str);
+   hud += "--------------------------------------------------------\n";
+   hud += StringFormat("  Capital Base: %.2f EUR | Capital Liquido: %.2f EUR\n", balance, equity);
+   hud += StringFormat("  Margem Utilizada: %.2f EUR | Margem Livre: %.2f EUR\n", margin, free_m);
+   hud += StringFormat("  Posicoes Abertas: %d / %d (Max Permitido)\n", open_pos, InpMaxPositions);
+   hud += "--------------------------------------------------------\n";
+   if(h1_adx > 0.0)
+   {
+      hud += StringFormat("  Regime: ADX(H1)=%.1f | FDI(M5)=%.3f | Kalman_Z=%+.2f\n", h1_adx, fdi_m5, kalman_z);
+   }
+   hud += "========================================================\n";
+
+   Comment(hud);
+}
+
 bool NewM5Bar()
 {
    static datetime last_time = 0;
@@ -73,11 +131,13 @@ bool NewM5Bar()
 int OnInit()
 {
    PrintFormat("[INIT] AI_TRADING_Twin_V2 carregado no ativo %s. Magic=%d", _Symbol, InpMagicNumber);
+   UpdateChartHUD("Inicializado com Sucesso (Aguardando Barra M5)");
    return(INIT_SUCCEEDED);
 }
 
 void OnDeinit(const int reason)
 {
+   Comment("");
    PrintFormat("[DEINIT] AI_TRADING_Twin_V2 finalizado. Razão: %d", reason);
 }
 
@@ -106,17 +166,37 @@ void OnTick()
 //===================================================================
 void EvaluateAndTrade()
 {
+   // 0a. Controlo de Risco: Limite Máximo de Posições Concorrentes
+   if(CountOpenPositions(_Symbol) >= InpMaxPositions)
+   {
+      UpdateChartHUD("POSICAO ATIVA (Gestao Monotonica)");
+      return;
+   }
+
+   // 0b. Proteção de Weekend Gap: Bloquear novas entradas na Sexta-feira após 19:00 UTC
+   if(InpWeekendProtection)
+   {
+      MqlDateTime dt_gmt;
+      TimeToStruct(TimeGMT(), dt_gmt);
+      if(dt_gmt.day_of_week == 5 && dt_gmt.hour >= 19)
+      {
+         UpdateChartHUD("WEEKEND SHIELD ATIVO (Sexta > 19:00 UTC)");
+         return;
+      }
+   }
+
    MqlRates m5[], h1[];
    if(CopyRates(_Symbol, PERIOD_M5, 1, 100, m5) != 100) return;
    if(CopyRates(_Symbol, PERIOD_H1, 1, 100, h1) != 100) return;
 
-   // 0. Filtro de Sessão Operacional Institucional (London + NY Overlap)
+   // 0c. Filtro de Sessão Operacional Institucional (London + NY Overlap)
    if(InpUseSessionFilter)
    {
       MqlDateTime dt;
       TimeToStruct(m5[99].time, dt);
       if(dt.hour < InpSessionStartHourUTC || dt.hour >= InpSessionEndHourUTC)
       {
+         UpdateChartHUD("FORA DA SESSAO OPERACIONAL (Aguardando 07-16 UTC)");
          return;
       }
    }
@@ -174,6 +254,7 @@ void EvaluateAndTrade()
    }
 
    double kalman_vel_z = g_regime.UpdateKalmanVelocityZ(m5[99].close, m5_atr);
+   UpdateChartHUD("Aguardando Gatilho M5", h1_adx, fdi_m5, kalman_vel_z);
 
    // 4. Verificação de Choque de Microestrutura / News Spike sem REST API
    if(CQuantRegimeEngine::IsMicrostructureShock(_Symbol, m5_atr))

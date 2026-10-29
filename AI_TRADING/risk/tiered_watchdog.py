@@ -4,6 +4,7 @@ from typing import Optional
 import MetaTrader5 as mt5
 import redis
 from core.config import CONFIG
+from agents.telegram_notifier import telegram_notifier
 
 logger = logging.getLogger("TieredWatchdog")
 
@@ -23,6 +24,7 @@ class TieredRiskWatchdog:
         self.max_daily_dd_pct = max_daily_dd_pct
         self.max_total_dd_pct = max_total_dd_pct
         self.initial_capital_eur = initial_capital_eur
+        self._last_state: str = "GREEN"
 
     def verify_and_enforce(self) -> str:
         if not mt5.initialize(path=CONFIG.MT5_PATH):
@@ -53,8 +55,17 @@ class TieredRiskWatchdog:
                 f"[RED ALERT] Violação de Drawdown (Diário={daily_dd:.2%}, Total={total_dd:.2%}). "
                 "A liquidar todas as posições!"
             )
+            telegram_notifier._send_sync(
+                f"🚨🚨🚨 <b>KILL SWITCH RED ATIVADO</b>\n"
+                f"Violação de Limite de Risco:\n"
+                f"Drawdown Diário: <b>{daily_dd:.2%}</b> (Máx: {self.max_daily_dd_pct:.2%})\n"
+                f"Drawdown Total: <b>{total_dd:.2%}</b> (Máx: {self.max_total_dd_pct:.2%})\n"
+                f"Saldo: {balance:.2f} EUR | Capital: {equity:.2f} EUR\n"
+                f"Ações tomadas: Liquidação imediata de todas as posições."
+            )
             self._liquidate_all_positions(reason="DRAWDOWN_BREACH")
             self.r.set("system:lock", "RED_KILL_SWITCH")
+            self._last_state = "RED"
             return "RED"
 
         # Auditoria de segurança: Garantir que NENHUMA posição aberta está sem Stop Loss no servidor
@@ -70,13 +81,20 @@ class TieredRiskWatchdog:
 
         if silence_sec <= 10.0:
             self.r.set("system:state", "GREEN")
+            self._last_state = "GREEN"
             return "GREEN"
         elif silence_sec <= 90.0:
             logger.warning(f"[YELLOW] Orchestrator silencioso há {silence_sec:.1f}s. Posições mantidas sob proteção MQL5.")
+            if self._last_state != "YELLOW":
+                telegram_notifier._send_sync(f"⚠️ <b>ALERTA YELLOW</b>: Orchestrator Python silencioso há {silence_sec:.1f}s.")
+                self._last_state = "YELLOW"
             self.r.set("system:state", "YELLOW")
             return "YELLOW"
         else:
             logger.error(f"[ORANGE] Orchestrator offline há {silence_sec:.1f}s. EA em modo AUTONOMOUS_DEFENSIVE.")
+            if self._last_state != "ORANGE":
+                telegram_notifier._send_sync(f"⚠️⚠️ <b>ALERTA ORANGE</b>: Orchestrator Python OFFLINE há {silence_sec:.1f}s. Modo de defesa autónoma ativo.")
+                self._last_state = "ORANGE"
             self.r.set("system:state", "ORANGE")
             return "ORANGE"
 

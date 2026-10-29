@@ -395,6 +395,12 @@ def run_institutional_backtest():
                     hit_exit = True
                     exit_price = t["tp"]
 
+            # Weekend Gap Protection: Fecho compulsório na Sexta-feira às 20:55 UTC
+            dt_utc = datetime.fromtimestamp(m5_time[i], tz=timezone.utc)
+            if dt_utc.weekday() == 4 and (dt_utc.hour > 20 or (dt_utc.hour == 20 and dt_utc.minute >= 55)):
+                hit_exit = True
+                exit_price = m5_close[i]
+
             if hit_exit:
                 pips = (exit_price - t["entry"]) / 0.0001 if t["dir"] == 1 else (t["entry"] - exit_price) / 0.0001
                 commission = t["remaining_lots"] * 6.0

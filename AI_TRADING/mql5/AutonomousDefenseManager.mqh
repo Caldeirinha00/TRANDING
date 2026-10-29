@@ -70,9 +70,34 @@ public:
       return HEALTH_ORANGE;
      }
 
+   // Proteção de Weekend Gap (Fase 4.2): Fecho preventivo compulsório na Sexta-feira às 20:55 UTC
+   void              CheckWeekendProtection(const string symbol)
+     {
+      MqlDateTime dt;
+      TimeToStruct(TimeGMT(), dt);
+      if(dt.day_of_week == 5 && (dt.hour > 20 || (dt.hour == 20 && dt.min >= 55)))
+        {
+         for(int i = PositionsTotal() - 1; i >= 0; i--)
+           {
+            ulong ticket = PositionGetTicket(i);
+            if(!PositionSelectByTicket(ticket))
+               continue;
+            if(PositionGetInteger(POSITION_MAGIC) == (long)m_magic && PositionGetString(POSITION_SYMBOL) == symbol)
+              {
+               PrintFormat("[DEFESA INSTITUCIONAL] Weekend Gap Shield: Fecho preventivo posicao #%I64u (%02d:%02d UTC).",
+                           ticket, dt.hour, dt.min);
+               m_trade.PositionClose(ticket, 20);
+              }
+           }
+        }
+     }
+
    // Executado a cada tick no OnTick() do EA independentemente do estado do Python
    void              ManageOpenPositionsTick(const string symbol, const double atr_m5)
      {
+      // 0. Proteção de Weekend Gap ativa
+      CheckWeekendProtection(symbol);
+
       ENUM_SYSTEM_HEALTH health = EvaluateSystemHealth();
 
       if(health == HEALTH_RED)

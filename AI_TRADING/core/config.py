@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     FMP_API_KEY: str
     ALPHA_VANTAGE_API_KEY: str = Field(default="")
     MISTRAL_API_KEYS: str = Field(default="")
+    TELEGRAM_BOT_TOKEN: str = Field(default="")
+    TELEGRAM_CHAT_ID: str = Field(default="")
 
     # LLM Configuration
     LLM_MODEL: str = Field(default="ministral-8b-2512")
