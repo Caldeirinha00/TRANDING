@@ -176,6 +176,7 @@ def run_institutional_backtest():
 
     rates_m5 = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, start_warmup, end_test)
     rates_h1 = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_H1, start_warmup, end_test)
+    rates_d1 = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_D1, datetime(2025, 1, 1, tzinfo=timezone.utc), end_test)
     sym_info = mt5.symbol_info(symbol)
     mt5.shutdown()
 
@@ -185,11 +186,12 @@ def run_institutional_backtest():
 
     df_m5 = pd.DataFrame(rates_m5)
     df_h1 = pd.DataFrame(rates_h1)
+    df_d1 = pd.DataFrame(rates_d1) if rates_d1 is not None else pd.DataFrame()
 
     df_m5["datetime"] = pd.to_datetime(df_m5["time"], unit="s", utc=True)
     df_h1["datetime"] = pd.to_datetime(df_h1["time"], unit="s", utc=True)
 
-    print(f"-> Dados carregados do MT5: M5={len(df_m5)} barras, H1={len(df_h1)} barras.")
+    print(f"-> Dados carregados do MT5: M5={len(df_m5)} barras, H1={len(df_h1)} barras, D1={len(df_d1)} barras.")
 
     # 1. Indicadores H1
     h1_close = df_h1["close"].values
@@ -200,6 +202,21 @@ def run_institutional_backtest():
     h1_ema20 = calc_ema(h1_close, 20)
     h1_ema50 = calc_ema(h1_close, 50)
     h1_adx = calc_adx(h1_high, h1_low, h1_close, 14)
+
+    # 1b. Indicadores D1 Regime
+    if len(df_d1) > 30:
+        d1_close = df_d1["close"].values
+        d1_high = df_d1["high"].values
+        d1_low = df_d1["low"].values
+        d1_time = df_d1["time"].values
+        d1_atr = calc_atr(d1_high, d1_low, d1_close, 14)
+        d1_pct = pd.Series(d1_atr).rolling(100, min_periods=20).apply(
+            lambda s: (s.iloc[-1] - s.min()) / max(1e-6, s.max() - s.min())
+        ).values
+        d1_idx_for_m5 = np.clip(np.searchsorted(d1_time, df_m5["time"].values, side="right") - 2, 0, len(d1_time) - 1)
+    else:
+        d1_pct = np.full(len(df_m5), 0.50)
+        d1_idx_for_m5 = np.zeros(len(df_m5), dtype=int)
 
     # 2. Indicadores M5
     m5_close = df_m5["close"].values
@@ -328,51 +345,72 @@ def run_institutional_backtest():
                 })
                 active_trade_a = None
 
-        # Gestão de Trade Ativo Portfolio B (Com Breakeven e Trailing Stop Institucional)
+        # Gestão de Trade Ativo Portfolio B (Institutional Alpha Twin: Trailing TP Parcial ou Full 1.5R)
         if active_trade_b is not None:
             t = active_trade_b
-            # 1. Breakeven Check ao atingir 1.0R
-            if not t["be_triggered"]:
-                favorable_pips = (m5_high[i] - t["entry"]) / 0.0001 if t["dir"] == 1 else (t["entry"] - m5_low[i]) / 0.0001
-                if favorable_pips >= t["r_pips"]:
-                    t["be_triggered"] = True
-                    t["sl"] = t["entry"] + (0.0001 if t["dir"] == 1 else -0.0001)
 
-            # 2. Avaliação de saída
-            hit_sl = False
-            hit_tp = False
+            # 1. Take Profit Parcial (50%) ao atingir 1.5R (Sem Breakeven precoce que estrangula o trade no ruído M5)
+            if not t["partial_taken"]:
+                favorable_pips = (m5_high[i] - t["entry"]) / 0.0001 if t["dir"] == 1 else (t["entry"] - m5_low[i]) / 0.0001
+                if favorable_pips >= 1.5 * t["r_pips"]:
+                    t["partial_taken"] = True
+                    half_lots = round(t["remaining_lots"] / 2.0, 2)
+                    if half_lots >= 0.01:
+                        partial_pips = 1.5 * t["r_pips"]
+                        partial_pnl = (partial_pips * half_lots * 9.17) - (half_lots * 6.0)
+                        state_b["balance"] += partial_pnl
+                        t["accumulated_pnl"] += partial_pnl
+                        t["remaining_lots"] = round(t["remaining_lots"] - half_lots, 2)
+                        # Trava SL a +0.2R para o restante (lucro garantido no runner)
+                        t["sl"] = t["entry"] + (0.2 * t["r_pips"] * 0.0001 if t["dir"] == 1 else -0.2 * t["r_pips"] * 0.0001)
+
+            # 2. Trailing Stop Monotónico para a posição restante (0.80 ATR)
+            if t["partial_taken"]:
+                trail_dist = 0.80 * m5_atr14[i]
+                if t["dir"] == 1:
+                    candidate_sl = m5_high[i] - trail_dist
+                    if candidate_sl > t["sl"]:
+                        t["sl"] = candidate_sl
+                else:
+                    candidate_sl = m5_low[i] + trail_dist
+                    if candidate_sl < t["sl"]:
+                        t["sl"] = candidate_sl
+
+            # 3. Avaliação de saída
+            hit_exit = False
             exit_price = 0.0
 
             if t["dir"] == 1:
                 if m5_low[i] <= t["sl"]:
-                    hit_sl = True
+                    hit_exit = True
                     exit_price = t["sl"]
-                elif m5_high[i] >= t["tp"]:
-                    hit_tp = True
+                elif not t["partial_taken"] and m5_high[i] >= t["tp"]:
+                    hit_exit = True
                     exit_price = t["tp"]
             else:
                 if m5_high[i] >= t["sl"]:
-                    hit_sl = True
+                    hit_exit = True
                     exit_price = t["sl"]
-                elif m5_low[i] <= t["tp"]:
-                    hit_tp = True
+                elif not t["partial_taken"] and m5_low[i] <= t["tp"]:
+                    hit_exit = True
                     exit_price = t["tp"]
 
-            if hit_sl or hit_tp:
-                # Calcular PnL com custo real de execução (1 pip = 0.0001 = 9.17 EUR por lote padrão)
+            if hit_exit:
                 pips = (exit_price - t["entry"]) / 0.0001 if t["dir"] == 1 else (t["entry"] - exit_price) / 0.0001
-                commission = t["lots"] * 6.0
-                pnl_eur = (pips * t["lots"] * 9.17) - commission
-                state_b["balance"] += pnl_eur
-                is_win = 1 if pnl_eur > 0 else 0
+                commission = t["remaining_lots"] * 6.0
+                rem_pnl = (pips * t["remaining_lots"] * 9.17) - commission
+                total_pnl = t["accumulated_pnl"] + rem_pnl
+                state_b["balance"] += rem_pnl
+                is_win = 1 if total_pnl > 0 else 0
                 state_b["trades"].append({
                     "entry_time": t["time"],
                     "exit_time": m5_time[i],
                     "dir": t["dir"],
-                    "lots": t["lots"],
-                    "pnl": pnl_eur,
+                    "lots": t["initial_lots"],
+                    "pnl": total_pnl,
                     "win": is_win,
-                    "r": pnl_eur / max(1.0, t["risk_eur"]),
+                    "r": total_pnl / max(1.0, t["risk_eur"]),
+                    "setup": t["setup_name"],
                 })
                 # Atualização Bayesiana Contínua
                 state_b["total_trades"] += 1
@@ -418,17 +456,33 @@ def run_institutional_backtest():
         if pe_val > 0.94:
             continue
 
-        # Gatilho de Pullback à EMA(20)
+        # Gatilhos de Alpha Multimodais (Pullback EMA20 + Liquidity Sweep Rejection)
         last_low = m5_low[i]
         last_high = m5_high[i]
         last_close = m5_close[i]
         last_e20 = m5_ema20[i]
 
         direction = 0
+        setup_name = ""
+
+        # Gatilho 1: Pullback à EMA(20)
         if trend_bull and last_low <= last_e20 and last_close > last_e20:
             direction = 1
+            setup_name = "EMA_PULLBACK"
         elif trend_bear and last_high >= last_e20 and last_close < last_e20:
             direction = -1
+            setup_name = "EMA_PULLBACK"
+
+        # Gatilho 2: Liquidity Sweep de 20 barras com rejeição e alinhamento cinemático
+        if direction == 0 and i >= 25:
+            min_20 = np.min(m5_low[i - 20 : i])
+            max_20 = np.max(m5_high[i - 20 : i])
+            if trend_bull and last_low < min_20 and last_close > min_20 and kalman_vel_z > 0.3:
+                direction = 1
+                setup_name = "LIQUIDITY_SWEEP"
+            elif trend_bear and last_high > max_20 and last_close < max_20 and kalman_vel_z < -0.3:
+                direction = -1
+                setup_name = "LIQUIDITY_SWEEP"
 
         if direction == 0:
             continue
@@ -520,12 +574,10 @@ def run_institutional_backtest():
             else:
                 meta_prob = float(ort_out[0][0])
 
-            # 2.3 Fronteira Bayesiana Dinâmica p_crit(t)
-            cost_ratio = (spread_pips * 0.0001) / max(sl_dist, 1e-5)
-            b_net = max(0.5, (1.5 - cost_ratio) / (1.0 + cost_ratio))
-            be_threshold = 1.0 / (1.0 + b_net)
-            fdi_pen = 0.15 * max(0.0, fdi_val - 1.42)
-            p_crit = float(min(0.62, max(0.38, be_threshold + fdi_pen)))
+            # 2.3 Fronteira Bayesiana Dinâmica p_crit(t) Calibrada
+            # A taxa base do LightGBM no treino é ~0.38; sinais de alta convicção operam com p_crit >= 0.41
+            fdi_pen = 0.10 * max(0.0, fdi_val - 1.44)
+            p_crit = float(min(0.48, max(0.41, 0.41 + fdi_pen)))
 
             # Veto por Meta-Guard
             if meta_prob < p_crit:
@@ -574,9 +626,14 @@ def run_institutional_backtest():
                     "sl": base_sl,
                     "tp": base_tp,
                     "lots": sizing_res.lots,
+                    "initial_lots": sizing_res.lots,
+                    "remaining_lots": sizing_res.lots,
                     "risk_eur": sizing_res.risk_eur,
                     "r_pips": r_pips,
                     "be_triggered": False,
+                    "partial_taken": False,
+                    "accumulated_pnl": 0.0,
+                    "setup_name": setup_name,
                 }
 
     # ==========================================================
@@ -670,7 +727,8 @@ def run_institutional_backtest():
         dt_str = datetime.fromtimestamp(tr["entry_time"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
         dir_str = "BUY " if tr["dir"] == 1 else "SELL"
         res_str = "WIN " if tr["win"] == 1 else "LOSS"
-        print(f"  {idx:02d}. [{dt_str}] {dir_str} | Lotes: {tr['lots']:.2f} | PnL: {tr['pnl']:+6.2f} EUR | R: {tr['r']:+5.2f}R | {res_str}")
+        setup_str = tr.get("setup", "PULLBACK")
+        print(f"  {idx:02d}. [{dt_str}] {dir_str} | {setup_str:<16} | Lotes: {tr['lots']:.2f} | PnL: {tr['pnl']:+6.2f} EUR | R: {tr['r']:+5.2f}R | {res_str}")
     print("=" * 72)
 
 

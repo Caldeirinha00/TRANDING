@@ -36,6 +36,12 @@ input bool   InpUseSessionFilter       = true;      // Ativar Filtro de Sessão 
 input int    InpSessionStartHourUTC    = 7;         // Hora Início UTC (Abertura Londres)
 input int    InpSessionEndHourUTC      = 16;        // Hora Fim UTC (Fecho Londres/NY Overlap)
 
+input group "--- Gatilhos de Alpha da Fase 2 ---"
+input bool   InpEnablePullback         = true;      // Ativar Gatilho de Pullback à EMA20
+input bool   InpEnableBOS              = false;     // Ativar Break of Structure (BOS - Falso rompimento em M5)
+input bool   InpEnableSweep            = true;      // Ativar Liquidity Sweep (Reversão de Extremos)
+input double InpD1_MinATRPercentile    = 0.05;      // Mínimo Percentil de Volatilidade D1
+
 input group "--- Volatilidade & Gatilhos M5 ---"
 input int    InpATR_Period             = 14;        // ATR Período
 input int    InpATR_Median_Lookback    = 50;        // ATR Lookback da Mediana
@@ -135,6 +141,14 @@ void EvaluateAndTrade()
    bool trend_bearish = h1_ema20 < h1_ema50;
    if(!trend_bullish && !trend_bearish) return;
 
+   // 1b. Filtro de Regime de Volatilidade Diária D1
+   if(InpD1_MinATRPercentile > 0.0)
+   {
+      double d1_pct = CQuantRegimeEngine::CalcD1ATRPercentile(_Symbol, 14, 100);
+      if(d1_pct < InpD1_MinATRPercentile)
+         return; // Mercado comprimido sem momentum suficiente
+   }
+
    // 2. Filtros de Volatilidade & Ruído M5
    double m5_atr = PyATR(m5, InpATR_Period);
    double m5_atr_series[];
@@ -168,18 +182,34 @@ void EvaluateAndTrade()
       return;
    }
 
-   // 5. Gatilho de Pullback à EMA(20)
-   double m5_ema20 = PyEMA(m5_closes, 20);
+   // 5. Gatilhos de Alpha Multimodais (Fase 2)
    MqlRates last_candle = m5[99];
-
+   double m5_ema20 = PyEMA(m5_closes, 20);
    int direction = 0; // 1 = BUY, -1 = SELL
-   if(trend_bullish && last_candle.low <= m5_ema20 && last_candle.close > m5_ema20)
+
+   // 5a. Pullback à EMA(20) com Confirmação Cinemática de Kalman
+   if(InpEnablePullback)
    {
-      direction = 1;
+      if(trend_bullish && last_candle.low <= m5_ema20 && last_candle.close > m5_ema20 && kalman_vel_z > 0.2)
+         direction = 1;
+      else if(trend_bearish && last_candle.high >= m5_ema20 && last_candle.close < m5_ema20 && kalman_vel_z < -0.2)
+         direction = -1;
    }
-   else if(trend_bearish && last_candle.high >= m5_ema20 && last_candle.close < m5_ema20)
+
+   // 5b. Break of Structure (BOS) com Impulso de Kalman
+   if(direction == 0 && InpEnableBOS)
    {
-      direction = -1;
+      int bos_dir = CQuantRegimeEngine::DetectBOSBreakout(m5, kalman_vel_z, 15);
+      if((bos_dir == 1 && trend_bullish) || (bos_dir == -1 && trend_bearish))
+         direction = bos_dir;
+   }
+
+   // 5c. Liquidity Sweep de Extremos Locais com Rejeição
+   if(direction == 0 && InpEnableSweep)
+   {
+      int sweep_dir = CQuantRegimeEngine::DetectLiquiditySweep(m5, kalman_vel_z, 20);
+      if((sweep_dir == 1 && trend_bullish) || (sweep_dir == -1 && trend_bearish))
+         direction = sweep_dir;
    }
 
    if(direction == 0) return;

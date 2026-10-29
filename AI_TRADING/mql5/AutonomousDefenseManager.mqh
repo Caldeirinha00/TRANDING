@@ -107,43 +107,76 @@ public:
          double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
          double curr_sl    = PositionGetDouble(POSITION_SL);
          double curr_tp    = PositionGetDouble(POSITION_TP);
+         double vol        = PositionGetDouble(POSITION_VOLUME);
+         string comment    = PositionGetString(POSITION_COMMENT);
+         bool partial_taken = (StringFind(comment, "[PARTIAL_TAKEN]") >= 0);
 
          if(pos_type == POSITION_TYPE_BUY)
            {
             double profit_dist = bid - open_price;
-            double new_sl = curr_sl;
+            double sl_dist     = (open_price > curr_sl && curr_sl > 0.0) ? (open_price - curr_sl) : (1.5 * atr_m5);
+            double new_sl      = curr_sl;
 
-            // 1. Break-Even Institucional (+2 pontos de comissão/slippage buffer)
-            if(profit_dist >= be_trigger_atr && curr_sl < open_price)
+            // 1. Break-Even Institucional (Ativado apenas a 1.4R para evitar o efeito assimétrico de ruído M5)
+            if(profit_dist >= 1.4 * sl_dist && curr_sl < open_price)
                new_sl = NormalizeDouble(open_price + 2.0 * point, digits);
 
-            // 2. Trailing Stop Monotónico
-            if(profit_dist > trail_dist_atr)
+            // 2. Trailing TP Parcial: Fecha 50% ao atingir 1.5R e remove teto de TP para surfar a tendência
+            if(!partial_taken && profit_dist >= 1.5 * sl_dist && vol >= 0.02)
               {
-               double candidate_sl = NormalizeDouble(bid - trail_dist_atr, digits);
+               double close_vol = NormalizeDouble(MathFloor((vol * 0.5) / 0.01) * 0.01, 2);
+               if(close_vol >= 0.01 && m_trade.PositionClosePartial(ticket, close_vol, 20))
+                 {
+                  partial_taken = true;
+                  new_sl = NormalizeDouble(open_price + 0.5 * sl_dist, digits);
+                  curr_tp = 0.0;
+                 }
+              }
+
+            // 3. Trailing Stop Monotónico (0.70 ATR para posição parcial restante, 1.0 ATR normal)
+            double effective_trail = partial_taken ? 0.70 * atr_m5 : trail_dist_atr;
+            if(profit_dist > effective_trail)
+              {
+               double candidate_sl = NormalizeDouble(bid - effective_trail, digits);
                if(candidate_sl > new_sl + point)
                   new_sl = candidate_sl;
               }
 
-            if(new_sl > curr_sl + point)
+            if(new_sl > curr_sl + point || curr_tp != PositionGetDouble(POSITION_TP))
                m_trade.PositionModify(ticket, new_sl, curr_tp);
            }
          else if(pos_type == POSITION_TYPE_SELL)
            {
             double profit_dist = open_price - ask;
-            double new_sl = (curr_sl <= 0.0) ? 999999.0 : curr_sl;
+            double sl_dist     = (curr_sl > open_price) ? (curr_sl - open_price) : (1.5 * atr_m5);
+            double new_sl      = (curr_sl <= 0.0) ? 999999.0 : curr_sl;
 
-            if(profit_dist >= be_trigger_atr && curr_sl > open_price)
+            // 1. Break-Even Institucional (Ativado apenas a 1.4R para evitar o efeito assimétrico de ruído M5)
+            if(profit_dist >= 1.4 * sl_dist && curr_sl > open_price)
                new_sl = NormalizeDouble(open_price - 2.0 * point, digits);
 
-            if(profit_dist > trail_dist_atr)
+            // 2. Trailing TP Parcial: Fecha 50% ao atingir 1.5R e remove teto de TP
+            if(!partial_taken && profit_dist >= 1.5 * sl_dist && vol >= 0.02)
               {
-               double candidate_sl = NormalizeDouble(ask + trail_dist_atr, digits);
+               double close_vol = NormalizeDouble(MathFloor((vol * 0.5) / 0.01) * 0.01, 2);
+               if(close_vol >= 0.01 && m_trade.PositionClosePartial(ticket, close_vol, 20))
+                 {
+                  partial_taken = true;
+                  new_sl = NormalizeDouble(open_price - 0.5 * sl_dist, digits);
+                  curr_tp = 0.0;
+                 }
+              }
+
+            // 3. Trailing Stop Monotónico
+            double effective_trail = partial_taken ? 0.70 * atr_m5 : trail_dist_atr;
+            if(profit_dist > effective_trail)
+              {
+               double candidate_sl = NormalizeDouble(ask + effective_trail, digits);
                if(candidate_sl < new_sl - point)
                   new_sl = candidate_sl;
               }
 
-            if(new_sl < curr_sl - point || curr_sl <= 0.0)
+            if(new_sl < curr_sl - point || curr_tp != PositionGetDouble(POSITION_TP))
                m_trade.PositionModify(ticket, new_sl, curr_tp);
            }
         }
