@@ -152,9 +152,13 @@ public:
                double close_vol = NormalizeDouble(MathFloor((vol * 0.5) / 0.01) * 0.01, 2);
                if(close_vol >= 0.01 && m_trade.PositionClosePartial(ticket, close_vol, 20))
                  {
-                  partial_taken = true;
-                  new_sl = NormalizeDouble(open_price + 0.5 * sl_dist, digits);
-                  curr_tp = 0.0;
+                  if(m_trade.ResultRetcode() == TRADE_RETCODE_DONE)
+                    {
+                     partial_taken = true;
+                     new_sl = NormalizeDouble(open_price + 0.5 * sl_dist, digits);
+                     curr_tp = 0.0;
+                     PositionSelectByTicket(ticket);
+                    }
                  }
               }
 
@@ -186,9 +190,13 @@ public:
                double close_vol = NormalizeDouble(MathFloor((vol * 0.5) / 0.01) * 0.01, 2);
                if(close_vol >= 0.01 && m_trade.PositionClosePartial(ticket, close_vol, 20))
                  {
-                  partial_taken = true;
-                  new_sl = NormalizeDouble(open_price - 0.5 * sl_dist, digits);
-                  curr_tp = 0.0;
+                  if(m_trade.ResultRetcode() == TRADE_RETCODE_DONE)
+                    {
+                     partial_taken = true;
+                     new_sl = NormalizeDouble(open_price - 0.5 * sl_dist, digits);
+                     curr_tp = 0.0;
+                     PositionSelectByTicket(ticket);
+                    }
                  }
               }
 
