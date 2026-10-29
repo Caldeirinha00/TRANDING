@@ -9,6 +9,7 @@ import sys
 import uuid
 import math
 from pathlib import Path
+from datetime import datetime, timezone
 import numpy as np
 import MetaTrader5 as mt5
 
@@ -77,19 +78,23 @@ def calc_kalman_velocity_z(close: np.ndarray, atr: np.ndarray) -> np.ndarray:
     return vel_z
 
 
-async def bootstrap_qdrant_and_onnx(symbol: str = "EURUSD", bars_m5: int = 18000) -> None:
-    print(f"=== INICIANDO BOOTSTRAP V2 ({symbol}) ===")
+async def bootstrap_qdrant_and_onnx(symbol: str = "EURUSD") -> None:
+    print(f"=== INICIANDO BOOTSTRAP V2 ({symbol}) - ZERO LOOKAHEAD LEAKAGE ===")
     if not mt5.initialize(path=CONFIG.MT5_PATH):
         if not mt5.initialize():
             raise RuntimeError("Falha ao inicializar o MetaTrader 5 para bootstrap.")
 
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M5, 0, bars_m5)
+    # Corte temporal estrito: Treinar APENAS em dados In-Sample (2026-05-01 a 2026-07-31)
+    start_train = datetime(2026, 5, 1, 0, 0, tzinfo=timezone.utc)
+    end_train = datetime(2026, 7, 31, 23, 59, tzinfo=timezone.utc)
+    print(f"-> A carregar historico In-Sample estrito ({start_train.date()} a {end_train.date()})...")
+    rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, start_train, end_train)
     mt5.shutdown()
 
     if rates is None or len(rates) < 1000:
-        raise RuntimeError("Histórico M5 insuficiente no MT5.")
+        raise RuntimeError("Histórico M5 insuficiente no MT5 para o período de treino.")
 
-    print(f"-> {len(rates)} barras M5 carregadas do MT5.")
+    print(f"-> {len(rates)} barras M5 carregadas do MT5 (Sem sobreposicao com o teste de Agosto-Outubro).")
 
     close = rates["close"].astype(np.float64)
     high = rates["high"].astype(np.float64)
@@ -110,6 +115,12 @@ async def bootstrap_qdrant_and_onnx(symbol: str = "EURUSD", bars_m5: int = 18000
 
     qdrant_url = f"http://{CONFIG.QDRANT_HOST}:{CONFIG.QDRANT_PORT}"
     qdrant = QdrantRegimeMemory(url=qdrant_url)
+    try:
+        from agents.qdrant_rag_modulator import COLLECTION_NAME
+        await qdrant.client.delete_collection(COLLECTION_NAME)
+        print(f"-> Colecao anterior '{COLLECTION_NAME}' eliminada do Qdrant para evitar contaminacao.")
+    except Exception:
+        pass
     await qdrant.ensure_collection()
 
     X_train = []

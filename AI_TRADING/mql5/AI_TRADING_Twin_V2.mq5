@@ -31,6 +31,11 @@ input double InpFDI_MaxChop            = 1.54;      // FDI Limite Máximo de Ru�
 input double InpPE_MaxEntropy          = 0.94;      // Permutation Entropy Máxima (Bandt-Pompe)
 input bool   InpUseHawkesOFI           = true;      // Validar Hawkes Tick OFI Imbalance
 
+input group "--- Filtros de Sessão Operacional ---"
+input bool   InpUseSessionFilter       = true;      // Ativar Filtro de Sessão (London + NY)
+input int    InpSessionStartHourUTC    = 7;         // Hora Início UTC (Abertura Londres)
+input int    InpSessionEndHourUTC      = 16;        // Hora Fim UTC (Fecho Londres/NY Overlap)
+
 input group "--- Volatilidade & Gatilhos M5 ---"
 input int    InpATR_Period             = 14;        // ATR Período
 input int    InpATR_Median_Lookback    = 50;        // ATR Lookback da Mediana
@@ -98,6 +103,17 @@ void EvaluateAndTrade()
    MqlRates m5[], h1[];
    if(CopyRates(_Symbol, PERIOD_M5, 1, 100, m5) != 100) return;
    if(CopyRates(_Symbol, PERIOD_H1, 1, 100, h1) != 100) return;
+
+   // 0. Filtro de Sessão Operacional Institucional (London + NY Overlap)
+   if(InpUseSessionFilter)
+   {
+      MqlDateTime dt;
+      TimeToStruct(m5[99].time, dt);
+      if(dt.hour < InpSessionStartHourUTC || dt.hour >= InpSessionEndHourUTC)
+      {
+         return;
+      }
+   }
 
    double h1_closes[], m5_closes[];
    ArrayResize(h1_closes, 100);
