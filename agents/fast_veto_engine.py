@@ -112,24 +112,17 @@ class DeterministicONNXMetaGuard:
         sl_mult_adj: float = 1.0,
         tp_mult_adj: float = 1.0,
         rag_expectancy: float = 0.0,
-        base_rr: float = 1.466,  # 2.2 ATR TP / 1.5 ATR SL
+        base_rr: float = 1.5,
     ) -> float:
         """
         Calcula a fronteira de decisão ótima p_crit(t) balanceando custo microestrutural,
         regime caótico de Sevcik e expectativa local da memória RAG.
+        Calibrada empiricamente para o classificador LightGBM/ONNX (taxa base de treino ~0.38).
         """
-        spread_price = spread_points * 0.00001
-        base_sl_price = max(1.5 * atr_m5, 1e-5)
-        cost_ratio = spread_price / base_sl_price
-
-        b_net = max(0.5, (base_rr * tp_mult_adj - cost_ratio) / (sl_mult_adj + cost_ratio))
-        be_threshold = (1.0 + 0.08) / (1.0 + b_net)
-
-        fdi_penalty = 0.18 * max(0.0, fdi_m5 - 1.42)
-        rag_bonus = 0.05 * float(np.tanh(rag_expectancy))
-
-        dynamic_p_crit = be_threshold + fdi_penalty - rag_bonus
-        return float(min(0.64, max(0.38, dynamic_p_crit)))
+        fdi_penalty = 0.10 * max(0.0, fdi_m5 - 1.44)
+        rag_bonus = 0.03 * float(np.tanh(rag_expectancy))
+        dynamic_p_crit = 0.41 + fdi_penalty - rag_bonus
+        return float(min(0.48, max(0.40, dynamic_p_crit)))
 
     async def evaluate_fast(
         self,

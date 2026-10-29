@@ -287,4 +287,97 @@ public:
       // Normalizado por ln(3!) = ln(6) = 1.791759469
       return MathMax(0.0, MathMin(1.0, entropy / 1.791759469));
      }
+
+   // 7. Break of Structure (BOS) com confirmação de impulso direcional
+   static int        DetectBOSBreakout(const MqlRates &rates[], const double kalman_vel_z, const int lookback = 15)
+     {
+      int size = ArraySize(rates);
+      if(size < lookback + 1)
+         return 0;
+
+      double highest_swing = rates[size - 2].high;
+      double lowest_swing  = rates[size - 2].low;
+      for(int i = size - 3; i >= size - 1 - lookback; i--)
+        {
+         if(rates[i].high > highest_swing) highest_swing = rates[i].high;
+         if(rates[i].low < lowest_swing)   lowest_swing  = rates[i].low;
+        }
+
+      MqlRates last = rates[size - 1];
+      if(last.close > highest_swing && kalman_vel_z > 0.8)
+         return 1; // BUY BOS
+      if(last.close < lowest_swing && kalman_vel_z < -0.8)
+         return -1; // SELL BOS
+
+      return 0;
+     }
+
+   // 8. Liquidity Sweep de Swing High/Low com Rejeição
+   static int        DetectLiquiditySweep(const MqlRates &rates[], const double kalman_vel_z, const int lookback = 20)
+     {
+      int size = ArraySize(rates);
+      if(size < lookback + 1)
+         return 0;
+
+      double min_prev = rates[size - 2].low;
+      double max_prev = rates[size - 2].high;
+      for(int i = size - 3; i >= size - 1 - lookback; i--)
+        {
+         if(rates[i].low < min_prev)   min_prev = rates[i].low;
+         if(rates[i].high > max_prev)  max_prev = rates[i].high;
+        }
+
+      MqlRates last = rates[size - 1];
+      if(last.low < min_prev && last.close > min_prev && kalman_vel_z > 0.2)
+         return 1; // BUY Sweep Reversal
+      if(last.high > max_prev && last.close < max_prev && kalman_vel_z < -0.2)
+         return -1; // SELL Sweep Reversal
+
+      return 0;
+     }
+
+   // 9. Percentil de Volatilidade D1 (0.0 a 1.0)
+   static double     CalcD1ATRPercentile(const string symbol, const int atr_period = 14, const int lookback_days = 100)
+     {
+      MqlRates d1_rates[];
+      int copied = CopyRates(symbol, PERIOD_D1, 1, lookback_days + atr_period, d1_rates);
+      if(copied < atr_period + 10)
+         return 0.50;
+
+      int total_bars = copied;
+      double d1_atrs[];
+      ArrayResize(d1_atrs, lookback_days);
+      int atr_count = 0;
+
+      for(int i = total_bars - 1; i >= total_bars - lookback_days && i >= atr_period; i--)
+        {
+         double tr_sum = 0.0;
+         for(int k = 0; k < atr_period; k++)
+           {
+            int idx = i - k;
+            double tr = MathMax(d1_rates[idx].high - d1_rates[idx].low,
+                        MathMax(MathAbs(d1_rates[idx].high - d1_rates[idx - 1].close),
+                                MathAbs(d1_rates[idx].low - d1_rates[idx - 1].close)));
+            tr_sum += tr;
+           }
+         d1_atrs[atr_count++] = tr_sum / (double)atr_period;
+        }
+
+      if(atr_count < 10)
+         return 0.50;
+
+      double curr_atr = d1_atrs[0];
+      double min_atr = d1_atrs[0], max_atr = d1_atrs[0];
+      for(int j = 1; j < atr_count; j++)
+        {
+         if(d1_atrs[j] < min_atr) min_atr = d1_atrs[j];
+         if(d1_atrs[j] > max_atr) max_atr = d1_atrs[j];
+        }
+
+      double range = max_atr - min_atr;
+      if(range <= 1e-6)
+         return 0.50;
+
+      return MathMax(0.0, MathMin(1.0, (curr_atr - min_atr) / range));
+     }
   };
