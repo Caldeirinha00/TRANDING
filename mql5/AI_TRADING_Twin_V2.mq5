@@ -131,6 +131,23 @@ bool NewM5Bar()
 int OnInit()
 {
    PrintFormat("[INIT] AI_TRADING_Twin_V2 carregado no ativo %s. Magic=%d", _Symbol, InpMagicNumber);
+
+   // Sincronização Obrigatória das Séries D1 e M5 (Pré-carregamento de Histórico)
+   if(!SeriesInfoInteger(_Symbol, PERIOD_D1, SERIES_SYNCHRONIZED))
+   {
+      Print("[INIT] A aguardar sincronizacao da serie D1...");
+   }
+   MqlRates d1_check[];
+   int copied_d1 = CopyRates(_Symbol, PERIOD_D1, 0, 120, d1_check);
+   if(copied_d1 < 115)
+   {
+      PrintFormat("[INIT ALERTA] Historico D1 insuficiente (%d < 115 barras). O filtro D1 pode falhar ate o historico descarregar.", copied_d1);
+   }
+   else
+   {
+      PrintFormat("[INIT OK] %d barras D1 sincronizadas para o calculo de percentil ATR.", copied_d1);
+   }
+
    UpdateChartHUD("Inicializado com Sucesso (Aguardando Barra M5)");
    return(INIT_SUCCEEDED);
 }
@@ -189,14 +206,16 @@ void EvaluateAndTrade()
    if(CopyRates(_Symbol, PERIOD_M5, 1, 100, m5) != 100) return;
    if(CopyRates(_Symbol, PERIOD_H1, 1, 100, h1) != 100) return;
 
-   // 0c. Filtro de Sessão Operacional Institucional (London + NY Overlap)
+   // 0c. Filtro de Sessão Operacional Institucional (London + NY Overlap) - Base UTC Estrita
    if(InpUseSessionFilter)
    {
       MqlDateTime dt;
-      TimeToStruct(m5[99].time, dt);
+      // Converte o tempo da barra M5 do servidor (EET/EEST) para UTC exato
+      datetime utc_bar_time = m5[99].time - TimeGMTOffset();
+      TimeToStruct(utc_bar_time, dt);
       if(dt.hour < InpSessionStartHourUTC || dt.hour >= InpSessionEndHourUTC)
       {
-         UpdateChartHUD("FORA DA SESSAO OPERACIONAL (Aguardando 07-16 UTC)");
+         UpdateChartHUD(StringFormat("FORA DA SESSAO (UTC %02d:%02d | Aguardando 07-16 UTC)", dt.hour, dt.min));
          return;
       }
    }
