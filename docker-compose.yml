@@ -1,0 +1,78 @@
+services:
+  questdb:
+    image: questdb/questdb:latest
+    container_name: questdb
+    ports:
+      - "9000:9000" # REST API / Web UI
+      - "8812:8812" # Postgres wire protocol
+      - "9009:9009" # Influx Line Protocol (ILP)
+    volumes:
+      - questdb_data:/root/.questdb
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
+    restart: unless-stopped
+    networks:
+      - ai_trading_net
+
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:latest
+    container_name: dragonfly
+    ports:
+      - "6379:6379"
+    ulimits:
+      memlock: -1
+    command: dragonfly --maxmemory=256m
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - ai_trading_net
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
+    restart: unless-stopped
+    networks:
+      - ai_trading_net
+
+  mt5:
+    image: lprett/mt5linux:mt5-installed
+    container_name: mt5
+    restart: unless-stopped
+    ports:
+      - "18812:18812"
+    environment:
+      - MT5_LOGIN=${MT5_LOGIN}
+      - MT5_PASSWORD=${MT5_PASSWORD}
+      - MT5_SERVER=${MT5_SERVER}
+      - MT5_HOST=0.0.0.0
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+    networks:
+      - ai_trading_net
+
+volumes:
+  questdb_data:
+  qdrant_data:
+
+networks:
+  ai_trading_net:
+    driver: bridge

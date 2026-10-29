@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+aiohttp
+redis
+pandas
+numpy
+websockets
+psutil
+mt5linux>=0.1.7\n
