@@ -384,6 +384,11 @@ def run_institutional_backtest():
         if i < test_start_idx:
             continue
 
+        # 0. Filtro de Sessão Operacional Institucional (07:00 a 16:00 UTC - London + NY Overlap)
+        hour_utc = (m5_time[i] % 86400) / 3600.0
+        if hour_utc < 7.0 or hour_utc >= 16.0:
+            continue
+
         h1_idx = h1_idx_for_m5[i]
         h1_e20 = h1_ema20[h1_idx]
         h1_e50 = h1_ema50[h1_idx]
@@ -660,7 +665,7 @@ def run_institutional_backtest():
     print(f"-> Sinais Vetados pelo Copilot V2:    {total_vetoed}")
     print(f"-> Perdas Reais Evitadas (Veto Precision): {saved_losses}/{total_vetoed} ({veto_precision:.1f}%)")
     print("-" * 72)
-    print("REGISTO DOS 14 TRADES EXECUTADOS PELO COPILOT V2:")
+    print(f"REGISTO DOS {len(state_b['trades'])} TRADES EXECUTADOS PELO COPILOT V2:")
     for idx, tr in enumerate(state_b["trades"], 1):
         dt_str = datetime.fromtimestamp(tr["entry_time"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
         dir_str = "BUY " if tr["dir"] == 1 else "SELL"
