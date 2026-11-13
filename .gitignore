@@ -1,0 +1,50 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python & Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Logs & Temporary Data
+*.log
+logs/*
+!logs/.gitkeep
+*.lock
+
+# Compiled Models & Binary Weights
+*.onnx
+*.pkl
+*.pt
+*.bin
+
+# Local Databases & Storage
+questdb_data/
+qdrant_data/
+*.sqlite3
+*.db
+
+# Editor & OS Metadata
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

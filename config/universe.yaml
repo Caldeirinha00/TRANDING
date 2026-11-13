@@ -1,0 +1,79 @@
+account_constraints:
+  base_currency: "EUR"
+  min_lot: 0.01
+  max_lot_tier2: 0.02
+  lot_step: 0.01
+  min_equity_for_metals_eur: 3000.0
+
+strategy_parameters:
+  mode: "BB_TREND_DIP"
+  timeframe_macro: "D1"
+  timeframe_trigger: "H4"
+  ema_fast_d1: 20
+  ema_macro_period: 50
+  ker_d1_period: 10
+  min_ker_d1: 0.25
+  min_cs_currency_spread: 0.55
+  donchian_h4_period: 20
+  bb_h4_period: 20
+  bb_std_dip: 2.0
+  ema_pullback_h4_period: 20
+  atr_period: 14
+  max_extension_atr: 2.8
+  min_bar_close_location: 0.60
+  sl_atr_multiplier: 2.4
+  tp_atr_multiplier: 4.2
+  breakeven_trigger_r: 1.10
+  breakeven_lock_r: 0.10
+  trailing_activation_r: 1.50
+  trailing_atr_mult: 2.0
+  vertical_barrier_bars_h4: 36  # 6 dias úteis (H2_BB_TREND_DIP_8P)
+
+approved_symbols:
+  EURUSD:
+    base: "EUR"
+    quote: "USD"
+    esma_leverage: 30
+    typical_spread_points: 10
+  USDJPY:
+    base: "USD"
+    quote: "JPY"
+    esma_leverage: 30
+    typical_spread_points: 13
+  AUDUSD:
+    base: "AUD"
+    quote: "USD"
+    esma_leverage: 20
+    typical_spread_points: 11
+  NZDUSD:
+    base: "NZD"
+    quote: "USD"
+    esma_leverage: 20
+    typical_spread_points: 12
+  USDCAD:
+    base: "USD"
+    quote: "CAD"
+    esma_leverage: 30
+    typical_spread_points: 10
+  USDCHF:
+    base: "USD"
+    quote: "CHF"
+    esma_leverage: 30
+    typical_spread_points: 12
+  GBPUSD:
+    base: "GBP"
+    quote: "USD"
+    esma_leverage: 30
+    typical_spread_points: 11
+  AUDJPY:
+    base: "AUD"
+    quote: "JPY"
+    esma_leverage: 20
+    typical_spread_points: 17
+
+forbidden_under_3000_eur:
+  - "XAUUSD"
+  - "XAGUSD"
+  - "US500"
+  - "NAS100"
+  - "GER40"
